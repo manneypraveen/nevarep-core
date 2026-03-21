@@ -1,0 +1,30 @@
+# Core
+python-dotenv>=1.0.0
+loguru>=0.7.0
+
+# Data fetching
+requests>=2.31.0
+yfinance>=0.2.36
+fredapi>=0.5.1
+beautifulsoup4>=4.12.0
+lxml>=5.1.0
+
+# Data processing
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Database
+duckdb>=0.10.0
+sqlalchemy>=2.0.0
+
+# LLM
+anthropic>=0.39.0
+
+# Scheduling (Phase 2)
+apscheduler>=3.10.0
+
+# Progress bars
+tqdm>=4.66.0
+
+# Testing
+pytest>=8.0.0
