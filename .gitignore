@@ -1,0 +1,37 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+
+# Data files (large, downloaded)
+data/raw_csv/
+data/articles/
+data/*.duckdb
+data/*.duckdb.wal
+*.csv
+*.pkl
+*.parquet
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/*.log
+
+# Jupyter
+.ipynb_checkpoints/
