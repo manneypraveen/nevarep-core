@@ -47,9 +47,9 @@ from config.settings import (
     NSE_FO_BHAV_URL_OLD, NSE_FO_BHAV_URL_UDIFF,
     UDIFF_START_DATE, NSE_FO_SYMBOLS,
     OLD_TO_UNIFIED, UDIFF_TO_UNIFIED,
-    NSE_MAX_ERRORS, NSE_SESSION_REFRESH_WAIT, MAX_SESSION_REFRESHES,
+    NSE_MAX_ERRORS,
 )
-from utils.nse_session import create_nse_session, get_fresh_headers, is_html_response, polite_sleep
+from utils.nse_session import is_html_response, run_download_loop
 from utils.date_utils import format_nse_old, format_nse_udiff
 
 Path("logs").mkdir(exist_ok=True)
@@ -281,88 +281,10 @@ def download_all(start: date, end: date, max_errors: int = NSE_MAX_ERRORS):
     logger.info(f"UDiFF format: {sum(1 for d in trading_days if d >= UDIFF_START_DATE)} days")
     logger.info(f"Session refresh threshold: {max_errors} consecutive errors")
 
-    session = create_nse_session()
-    headers = get_fresh_headers()
-
-    stats = {
-        "downloaded": 0, "skipped": 0, "holidays": 0,
-        "blocked": 0, "errors": 0, "session_refreshes": 0,
-    }
-    consecutive_errors = 0
-    session_refreshes = 0
-    downloaded_paths = []
-
-    i = 0
-    pbar = tqdm(total=len(trading_days), desc="Downloading bhav copies")
-
-    while i < len(trading_days):
-        d = trading_days[i]
-        csv_path, status = download_one_day(d, session, headers)
-
-        if status == "ok":
-            stats["downloaded"] += 1
-            consecutive_errors = 0
-            if csv_path:
-                downloaded_paths.append((d, csv_path))
-
-        elif status == "exists":
-            stats["skipped"] += 1
-            consecutive_errors = 0
-            if csv_path:
-                downloaded_paths.append((d, csv_path))
-
-        elif status == "holiday_404":
-            stats["holidays"] += 1
-            consecutive_errors += 1
-
-        elif status in ("blocked", "error"):
-            if status == "blocked":
-                stats["blocked"] += 1
-            else:
-                stats["errors"] += 1
-            consecutive_errors += 1
-
-        # Session refresh on consecutive errors
-        if consecutive_errors >= max_errors:
-            if session_refreshes < MAX_SESSION_REFRESHES:
-                session_refreshes += 1
-                stats["session_refreshes"] += 1
-                wait_time = NSE_SESSION_REFRESH_WAIT * session_refreshes
-
-                logger.warning(
-                    f"Session refresh #{session_refreshes}/{MAX_SESSION_REFRESHES}: "
-                    f"{consecutive_errors} consecutive errors. Waiting {wait_time}s..."
-                )
-
-                session.close()
-                time.sleep(wait_time)
-
-                headers = get_fresh_headers()
-                session = create_nse_session()
-                consecutive_errors = 0
-
-                # Rewind to retry failed dates
-                rewind = min(max_errors, i)
-                i -= rewind
-                stats["blocked"] = max(0, stats["blocked"] - rewind)
-                stats["holidays"] = max(0, stats["holidays"] - rewind)
-
-                logger.info(f"Retrying from {trading_days[i]} with fresh session")
-                time.sleep(2)
-                continue
-            else:
-                logger.error(
-                    f"Exhausted all {MAX_SESSION_REFRESHES} session refreshes. "
-                    f"NSE may be rate-limiting your IP. Try again later."
-                )
-                consecutive_errors = 0
-
-        i += 1
-        pbar.update(1)
-        polite_sleep(base=1.0, jitter=1.2)
-
-    pbar.close()
-    session.close()
+    stats, downloaded_paths = run_download_loop(
+        trading_days, download_one_day, max_errors,
+        desc="Downloading bhav copies", sleep_base=1.0, sleep_jitter=1.2,
+    )
 
     logger.info(
         f"\nDownload Summary:\n"

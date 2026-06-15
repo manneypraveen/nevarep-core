@@ -559,10 +559,11 @@ def display_results(target_date: date, similar_days: list[dict], analysis: dict)
 
     for d in similar_days:
         dims = d["dimensions"]
+        next_day_change = d.get("next_day_change")
+        next_day_str = f"{next_day_change:>5.1f}% " if next_day_change is not None else f"{'N/A':>6} "
         print(f"  {str(d['date']):<12} {d['similarity']:>5.2f} "
               f"{d['nifty_change']:>7.1f}% "
-              f"{d['next_day_change']:>5.1f}% " if d['next_day_change'] else f"{'N/A':>6} ",
-              end="")
+              f"{next_day_str}", end="")
         print(f"{d.get('three_day_change', 0) or 0:>5.1f}%  "
               f"{dims['macro']:>5.2f} {dims['fii_flow']:>5.2f} "
               f"{dims['news_event']:>5.2f} {dims['options']:>5.2f} {dims['technical']:>5.2f}")
