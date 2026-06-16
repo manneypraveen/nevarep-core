@@ -161,7 +161,8 @@ def build_context(con: duckdb.DuckDBPyConnection, d: date) -> dict | None:
         SELECT pcr_oi, pcr_classification, vix_regime,
                price_in_oi_range, oi_breach_side,
                fii_long_short_ratio, max_pain_strike,
-               highest_put_oi_strike, highest_call_oi_strike
+               highest_put_oi_strike, highest_call_oi_strike,
+               atm_iv, iv_skew, iv_percentile, gex
         FROM daily_options_snapshot
         WHERE trade_date = ? AND index_name = 'NIFTY50'
     """, [d]).fetchone()
@@ -176,6 +177,10 @@ def build_context(con: duckdb.DuckDBPyConnection, d: date) -> dict | None:
         ctx["max_pain"] = row[6]
         ctx["oi_support"] = row[7]
         ctx["oi_resistance"] = row[8]
+        ctx["atm_iv"] = row[9]    # annualised % (e.g. 14.5)
+        ctx["iv_skew"] = row[10]  # 25δ put IV - call IV
+        ctx["iv_percentile"] = row[11]
+        ctx["gex"] = row[12]
 
     # ── Technical position (Nifty) ──
     row = con.execute("""
@@ -312,6 +317,22 @@ def score_options(ctx1: dict, ctx2: dict) -> float:
 
     # PCR classification
     scores.append(exact_match(ctx1.get("pcr_class"), ctx2.get("pcr_class")))
+
+    # ATM IV band (when available — was always NULL before greeks engine)
+    # Bands: <10%, 10-15%, 15-20%, 20-25%, >25% annualised IV
+    scores.append(band_match(
+        ctx1.get("atm_iv"), ctx2.get("atm_iv"),
+        [10.0, 15.0, 20.0, 25.0]
+    ))
+
+    # IV skew direction: both negative (put-skew dominant) vs both positive
+    iv_skew1 = ctx1.get("iv_skew")
+    iv_skew2 = ctx2.get("iv_skew")
+    if iv_skew1 is not None and iv_skew2 is not None:
+        same_sign = (iv_skew1 >= 0) == (iv_skew2 >= 0)
+        scores.append(1.0 if same_sign else 0.3)
+    else:
+        scores.append(0.5)  # unknown
 
     return sum(scores) / len(scores)
 

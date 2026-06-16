@@ -175,7 +175,28 @@ con.execute("""
         max_pain_accurate       BOOLEAN,
         indicators_correct_count INTEGER,
         mismatch_severity       VARCHAR(10),
+        gex                     DECIMAL(18,2),
         PRIMARY KEY (trade_date, index_name)
+    )
+""")
+
+# ── Daily greeks (per-strike IV + greeks for NIFTY50 + BANKNIFTY) ──
+# CRUDEOIL: no MCX options feed — TODO: MCX crude options feed
+con.execute("""
+    CREATE TABLE IF NOT EXISTS daily_greeks (
+        trade_date      DATE NOT NULL,
+        index_name      VARCHAR(20) NOT NULL,
+        expiry_date     DATE NOT NULL,
+        strike_price    DECIMAL(12,2) NOT NULL,
+        opt_type        VARCHAR(2) NOT NULL,
+        iv              DECIMAL(8,6),
+        delta           DECIMAL(8,6),
+        gamma           DECIMAL(12,8),
+        theta           DECIMAL(8,6),
+        vega            DECIMAL(8,6),
+        open_interest   BIGINT,
+        gex             DECIMAL(18,2),
+        PRIMARY KEY (trade_date, index_name, expiry_date, strike_price, opt_type)
     )
 """)
 
