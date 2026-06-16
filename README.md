@@ -44,7 +44,6 @@ nevarep-core/
 │   ├── narrative_generator.py  # Daily narrative + pattern tags
 │   └── prompts.py              # All LLM prompt templates
 ├── db/                    # Database
-│   ├── schema.sql              # DDL (created by setup.py)
 │   ├── loader.py               # Parse + load data into DuckDB
 │   └── derived.py              # Compute PCR, max pain, DMAs, candle types
 ├── engine/                # Prediction
@@ -105,7 +104,9 @@ nevarep-core/
 
 ## Database
 
-DuckDB (embedded, file-based) with 13 tables:
+DuckDB (embedded, file-based) with 13 tables. The DDL lives inline in
+`setup.py` (no separate `db/schema.sql` file) — run `python setup.py` to
+create or recreate the schema.
 
 | Table | Rows (3yr est.) | Description |
 |-------|-----------------|-------------|

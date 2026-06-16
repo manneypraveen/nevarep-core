@@ -193,15 +193,17 @@ def run_backtest(
             pred["predicted_range_low"] <= actual_change <= pred["predicted_range_high"]
         )
 
-        # Simulated P&L (simplified)
-        # If predicted bearish + correct → profit = |actual_change|
-        # If predicted bearish + wrong → loss = actual_change (positive = loss)
+        # Directional P&L using realized index return (symmetric, no scaling tricks).
+        # Bullish → long the index: pnl = actual_change.
+        # Bearish → short the index: pnl = -actual_change.
+        # Mixed → no position: pnl = 0.
+        # This is honest (no 2:1 win/loss asymmetry, no artificial dampening).
         if pred_direction == "bullish":
-            strategy_pnl = actual_change if direction_correct else -abs(actual_change) * 0.5
+            strategy_pnl = actual_change
         elif pred_direction == "bearish":
-            strategy_pnl = abs(actual_change) if direction_correct else -actual_change * 0.5
+            strategy_pnl = -actual_change
         else:
-            strategy_pnl = 0  # skip mixed signals
+            strategy_pnl = 0
 
         results.append({
             "prediction_date": d,
@@ -240,8 +242,8 @@ def run_backtest(
     win_rate = win_trades / max(win_trades + loss_trades, 1) * 100
 
     avg_win = df[df["strategy_pnl"] > 0]["strategy_pnl"].mean() if win_trades > 0 else 0
-    avg_loss = abs(df[df["strategy_pnl"] < 0]["strategy_pnl"].mean()) if loss_trades > 0 else 1
-    reward_risk = avg_win / max(avg_loss, 0.01)
+    avg_loss = abs(df[df["strategy_pnl"] < 0]["strategy_pnl"].mean()) if loss_trades > 0 else None
+    reward_risk = (avg_win / avg_loss) if avg_loss else None
 
     # Sharpe (annualized, simplified)
     daily_returns = df["strategy_pnl"].values
@@ -308,8 +310,8 @@ def run_backtest(
     print(f"  Cumulative P&L:    {cumulative_pnl:+.1f}%")
     print(f"  Win rate:          {win_rate:.1f}%")
     print(f"  Avg win:           {avg_win:+.2f}%")
-    print(f"  Avg loss:          {-avg_loss:+.2f}%")
-    print(f"  Reward:Risk:       {reward_risk:.2f}:1")
+    print(f"  Avg loss:          {(-avg_loss):+.2f}%" if avg_loss is not None else "  Avg loss:          N/A (no losing trades)")
+    print(f"  Reward:Risk:       {reward_risk:.2f}:1" if reward_risk is not None else "  Reward:Risk:       undefined (no losing trades)")
     print(f"  Sharpe ratio:      {sharpe:.2f}")
     print(f"  Max drawdown:      {max_drawdown:+.1f}%")
     print()
@@ -319,7 +321,7 @@ def run_backtest(
     targets = [
         ("Direction accuracy > 60%", dir_accuracy > 60),
         ("Win rate > 55%", win_rate > 55),
-        ("Reward:Risk > 1.5:1", reward_risk > 1.5),
+        ("Reward:Risk > 1.5:1", reward_risk is not None and reward_risk > 1.5),
         ("Sharpe > 1.2", sharpe > 1.2),
         ("Max drawdown > -15%", max_drawdown > -15),
     ]

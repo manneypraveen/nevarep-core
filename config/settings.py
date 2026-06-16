@@ -97,6 +97,17 @@ NSE_PARTICIPANT_VOL_URL = (
 UDIFF_START_DATE = date(2024, 7, 8)
 
 
+# ── Instrument scope ──
+# Tier-1 pipeline covers these three instruments only.
+# CRUDEOIL: price + futures + global tokens only (no MCX options).
+INSTRUMENTS = ["NIFTY50", "BANKNIFTY", "CRUDEOIL"]
+
+# Lot sizes for GEX computation
+LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30}
+
+# Risk-free rate (RBI repo proxy; wire to FRED later via FRED_API_KEY)
+RISK_FREE_RATE = 0.065
+
 # ── Symbol Filters ──
 # These are the ONLY symbols we extract from the bhav copy
 

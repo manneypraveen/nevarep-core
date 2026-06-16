@@ -33,10 +33,9 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import (
     DB_PATH, HIST_START, HIST_END, PARTICIPANT_OI_DIR,
-    NSE_PARTICIPANT_OI_URL, NSE_MAX_ERRORS, NSE_SESSION_REFRESH_WAIT,
-    MAX_SESSION_REFRESHES,
+    NSE_PARTICIPANT_OI_URL, NSE_MAX_ERRORS,
 )
-from utils.nse_session import create_nse_session, get_fresh_headers, is_html_response, polite_sleep
+from utils.nse_session import is_html_response, run_download_loop
 from utils.date_utils import format_nse_participant_oi
 
 Path("logs").mkdir(exist_ok=True)
@@ -102,50 +101,10 @@ def download_all(start: date, end: date, max_errors: int = NSE_MAX_ERRORS):
 
     logger.info(f"Downloading participant OI: {start} to {end} ({len(trading_days)} trading days)")
 
-    session = create_nse_session()
-    headers = get_fresh_headers()
-
-    stats = {"downloaded": 0, "skipped": 0, "holidays": 0, "blocked": 0, "errors": 0, "refreshes": 0}
-    consecutive_errors = 0
-    session_refreshes = 0
-
-    i = 0
-    pbar = tqdm(total=len(trading_days), desc="Downloading participant OI")
-
-    while i < len(trading_days):
-        d = trading_days[i]
-        _, status = download_one_day(d, session, headers)
-
-        if status in ("ok", "exists"):
-            stats["downloaded" if status == "ok" else "skipped"] += 1
-            consecutive_errors = 0
-        elif status == "holiday_404":
-            stats["holidays"] += 1
-            consecutive_errors += 1
-        else:
-            stats["blocked" if status == "blocked" else "errors"] += 1
-            consecutive_errors += 1
-
-        if consecutive_errors >= max_errors and session_refreshes < MAX_SESSION_REFRESHES:
-            session_refreshes += 1
-            stats["refreshes"] += 1
-            wait_time = NSE_SESSION_REFRESH_WAIT * session_refreshes
-            logger.warning(f"Session refresh #{session_refreshes}, waiting {wait_time}s...")
-            session.close()
-            time.sleep(wait_time)
-            headers = get_fresh_headers()
-            session = create_nse_session()
-            consecutive_errors = 0
-            rewind = min(max_errors, i)
-            i -= rewind
-            continue
-
-        i += 1
-        pbar.update(1)
-        polite_sleep(base=0.5, jitter=0.5)
-
-    pbar.close()
-    session.close()
+    stats, _ = run_download_loop(
+        trading_days, download_one_day, max_errors,
+        desc="Downloading participant OI", sleep_base=0.5, sleep_jitter=0.5,
+    )
 
     logger.info(
         f"\nDownload Summary:\n"
@@ -154,7 +113,7 @@ def download_all(start: date, end: date, max_errors: int = NSE_MAX_ERRORS):
         f"  Holidays:    {stats['holidays']}\n"
         f"  Blocked:     {stats['blocked']}\n"
         f"  Errors:      {stats['errors']}\n"
-        f"  Refreshes:   {stats['refreshes']}"
+        f"  Refreshes:   {stats['session_refreshes']}"
     )
 
 

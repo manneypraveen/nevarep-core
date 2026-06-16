@@ -175,7 +175,28 @@ con.execute("""
         max_pain_accurate       BOOLEAN,
         indicators_correct_count INTEGER,
         mismatch_severity       VARCHAR(10),
+        gex                     DECIMAL(18,2),
         PRIMARY KEY (trade_date, index_name)
+    )
+""")
+
+# ── Daily greeks (per-strike IV + greeks for NIFTY50 + BANKNIFTY) ──
+# CRUDEOIL: no MCX options feed — TODO: MCX crude options feed
+con.execute("""
+    CREATE TABLE IF NOT EXISTS daily_greeks (
+        trade_date      DATE NOT NULL,
+        index_name      VARCHAR(20) NOT NULL,
+        expiry_date     DATE NOT NULL,
+        strike_price    DECIMAL(12,2) NOT NULL,
+        opt_type        VARCHAR(2) NOT NULL,
+        iv              DECIMAL(8,6),
+        delta           DECIMAL(8,6),
+        gamma           DECIMAL(12,8),
+        theta           DECIMAL(8,6),
+        vega            DECIMAL(8,6),
+        open_interest   BIGINT,
+        gex             DECIMAL(18,2),
+        PRIMARY KEY (trade_date, index_name, expiry_date, strike_price, opt_type)
     )
 """)
 
@@ -273,8 +294,12 @@ con.execute("""
         headline            VARCHAR(500) NOT NULL,
         source              VARCHAR(100),
         category            VARCHAR(30) NOT NULL,
+        entity              VARCHAR(20),
+        direction           VARCHAR(10),
         severity            VARCHAR(10) NOT NULL,
+        scheduled           BOOLEAN DEFAULT FALSE,
         expected_impact     VARCHAR(10),
+        novelty_weight      DECIMAL(5,4) DEFAULT 1.0,
         index_affected      VARCHAR(20),
         sector_affected     VARCHAR(30),
         actual_value        DECIMAL(12,4),
@@ -354,6 +379,18 @@ con.execute("""
         range_correct       BOOLEAN,
         strategy_pnl        DECIMAL(12,2),
         notes               TEXT
+    )
+""")
+
+# ── Daily tokens ──
+# One row per (trade_date, index_name, token); bag-of-tokens for similarity.
+# Bucket boundaries live in analysis/tokenizer.py — tune on training folds only.
+con.execute("""
+    CREATE TABLE IF NOT EXISTS daily_tokens (
+        trade_date  DATE NOT NULL,
+        index_name  VARCHAR(20) NOT NULL,
+        token       VARCHAR(60) NOT NULL,
+        PRIMARY KEY (trade_date, index_name, token)
     )
 """)
 

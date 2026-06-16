@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import (
     DB_PATH, HIST_START, HIST_END, ARTICLES_DIR, ANTHROPIC_API_KEY,
 )
+from llm.news_structurer import structure_articles
 
 Path("logs").mkdir(exist_ok=True)
 logger.add("logs/news_scraper.log", rotation="10 MB")
@@ -54,18 +55,21 @@ NEWS_DIR.mkdir(parents=True, exist_ok=True)
 
 GDELT_DOC_API = "https://api.gdeltproject.org/api/v2/doc/doc"
 
-# Search queries to cover all major market-moving categories
+# GDELT queries scoped to NIFTY50, BANKNIFTY, and CRUDEOIL (Tier-1 instruments)
 GDELT_QUERIES = [
-    "nifty market india",
-    "bank nifty sensex",
-    "RBI monetary policy rate",
-    "FII selling buying india",
-    "crude oil india rupee",
+    # NIFTY50
+    "nifty 50 india market",
+    "RBI monetary policy repo rate india",
+    "FII selling buying nifty india",
+    "india inflation GDP CPI budget fiscal",
     "SEBI regulation india market",
+    "FOMC fed rate india nifty impact",
     "india stock market crash rally",
-    "FOMC fed rate india impact",
-    "india inflation CPI GDP",
-    "india budget fiscal",
+    # BANKNIFTY
+    "bank nifty banking sector india",
+    # CRUDEOIL
+    "crude oil price OPEC brent india rupee",
+    "crude oil inventory EIA API",
 ]
 
 
@@ -248,114 +252,15 @@ def download_all(start: date, end: date):
 
 
 # ═══════════════════════════════════════════════════════════
-# LLM STRUCTURING (Claude API)
-# ═══════════════════════════════════════════════════════════
-
-STRUCTURE_PROMPT = """Analyze these news headlines from Indian financial markets for {date}.
-
-HEADLINES:
-{headlines}
-
-MARKET CONTEXT FOR THIS DAY:
-- Nifty change: {nifty_change}%
-- Bank Nifty change: {banknifty_change}%
-
-For each headline that could plausibly move Nifty/BankNifty/Sensex, extract:
-
-Return ONLY a JSON array (no markdown, no preamble):
-[
-  {{
-    "headline": "concise summary (max 100 chars)",
-    "category": "one of: rbi_policy, government_fiscal, sebi_regulatory, earnings_corporate, fii_dii_activity, geopolitical, us_fed, global_central_bank, crude_commodity, currency, sectoral, technical_structural, domestic_macro, sentiment_flow, black_swan",
-    "severity": "low / medium / high / critical",
-    "expected_impact": "bullish / bearish / neutral",
-    "index_affected": "NIFTY50 / BANKNIFTY / ALL",
-    "sector_affected": "banking / it / oil_gas / auto / pharma / fmcg / metals / broad / none"
-  }}
-]
-
-Rules:
-- Max 8 items — only market-moving news
-- Skip stock-specific news unless it's a Nifty heavyweight (Reliance, HDFC Bank, Infosys, TCS)
-- critical = RBI surprise, major geo event, US crash >3%
-- high = FII selling >3000cr, crude spike >3%, FOMC surprise
-- medium = routine data releases, sector news
-- low = minor regulatory, small corporate
-- If no market-moving news, return empty array []
-"""
-
-
-def structure_news_with_llm(d: date, articles: list[dict],
-                            nifty_change: float = 0, bn_change: float = 0) -> list[dict]:
-    """
-    Use Claude API to structure raw headlines into categorized news items.
-    """
-    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY.startswith("sk-ant-xxxxx"):
-        return []
-
-    headlines = "\n".join(
-        f"- {art['title']} ({art.get('source', 'unknown')})"
-        for art in articles[:30]  # limit to 30 headlines
-    )
-
-    if not headlines.strip():
-        return []
-
-    prompt = STRUCTURE_PROMPT.format(
-        date=d.isoformat(),
-        headlines=headlines,
-        nifty_change=nifty_change,
-        banknifty_change=bn_change,
-    )
-
-    try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 2000,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30,
-        )
-
-        if resp.status_code != 200:
-            logger.warning(f"Claude API error {resp.status_code}: {resp.text[:200]}")
-            return []
-
-        data = resp.json()
-        text = data["content"][0]["text"].strip()
-
-        # Parse JSON from response
-        # Strip markdown fences if present
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-
-        items = json.loads(text)
-        return items if isinstance(items, list) else []
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse LLM response for {d}: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"LLM structuring error for {d}: {e}")
-        return []
-
-
-# ═══════════════════════════════════════════════════════════
 # LOAD INTO DATABASE
 # ═══════════════════════════════════════════════════════════
 
 def load_to_db(start: date = None, end: date = None, use_llm: bool = False):
-    """Load news articles into daily_news_events table."""
+    """
+    Load news articles into daily_news_events table.
+    Uses llm/news_structurer.py for dedup + classification + novelty weighting.
+    Falls back to keyword classification when no API key is configured.
+    """
     json_files = sorted(NEWS_DIR.glob("news_*.json"))
     if not json_files:
         logger.error("No news JSON files found. Run download first.")
@@ -363,39 +268,30 @@ def load_to_db(start: date = None, end: date = None, use_llm: bool = False):
 
     con = duckdb.connect(str(DB_PATH))
 
-    # Get market data for LLM context
+    # Market data for LLM context
     market_data = {}
-    if use_llm:
-        rows = con.execute("""
-            SELECT trade_date, change_pct FROM daily_index_ohlc
-            WHERE index_name = 'NIFTY50'
-        """).fetchall()
-        for row in rows:
-            market_data[row[0]] = row[1]
+    for row in con.execute("""
+        SELECT trade_date, change_pct FROM daily_index_ohlc WHERE index_name = 'NIFTY50'
+    """).fetchall():
+        market_data[row[0]] = row[1]
 
     bn_data = {}
-    if use_llm:
-        rows = con.execute("""
-            SELECT trade_date, change_pct FROM daily_index_ohlc
-            WHERE index_name = 'BANKNIFTY'
-        """).fetchall()
-        for row in rows:
-            bn_data[row[0]] = row[1]
+    for row in con.execute("""
+        SELECT trade_date, change_pct FROM daily_index_ohlc WHERE index_name = 'BANKNIFTY'
+    """).fetchall():
+        bn_data[row[0]] = row[1]
 
-    logger.info(f"Processing {len(json_files)} news files...")
+    logger.info(f"Processing {len(json_files)} news files (use_llm={use_llm})...")
 
     all_records = []
-    structured_count = 0
-    raw_count = 0
+    prior_categories: list[str] = []  # rolling list for novelty decay
 
     for jf in tqdm(json_files, desc="Processing news"):
-        # Extract date from filename
         date_str = jf.stem.replace("news_", "")
         try:
             trade_date = date.fromisoformat(date_str)
         except ValueError:
             continue
-
         if start and trade_date < start:
             continue
         if end and trade_date > end:
@@ -405,61 +301,38 @@ def load_to_db(start: date = None, end: date = None, use_llm: bool = False):
         if not articles:
             continue
 
-        if use_llm and ANTHROPIC_API_KEY and not ANTHROPIC_API_KEY.startswith("sk-ant-xxxxx"):
-            # LLM structuring
-            nifty_chg = market_data.get(trade_date, 0) or 0
-            bn_chg = bn_data.get(trade_date, 0) or 0
+        nifty_chg = float(market_data.get(trade_date) or 0)
+        bn_chg = float(bn_data.get(trade_date) or 0)
 
-            items = structure_news_with_llm(trade_date, articles, nifty_chg, bn_chg)
+        rows = structure_articles(
+            trade_date, articles,
+            nifty_change=nifty_chg,
+            bn_change=bn_chg,
+            prior_categories=prior_categories,
+            retry_raw=True,
+        )
 
-            for item in items:
-                all_records.append({
-                    "trade_date": trade_date,
-                    "news_timestamp": None,
-                    "headline": item.get("headline", "")[:500],
-                    "source": "gdelt_llm",
-                    "category": item.get("category", "sentiment_flow"),
-                    "severity": item.get("severity", "medium"),
-                    "expected_impact": item.get("expected_impact", "neutral"),
-                    "index_affected": item.get("index_affected", "ALL"),
-                    "sector_affected": item.get("sector_affected", "broad"),
-                    "actual_value": None,
-                    "expected_value": None,
-                    "surprise": None,
-                    "surprise_direction": None,
-                })
-                structured_count += 1
-
-            # Rate limit Claude API
-            time.sleep(0.5)
-        else:
-            # No LLM — load raw headlines with basic categorization
-            for art in articles[:10]:  # max 10 per day
-                title = art.get("title", "")
-                if len(title) < 20:
-                    continue
-
-                # Basic keyword-based categorization
-                category = categorize_headline(title)
-                severity = estimate_severity(title)
-                impact = estimate_impact(title)
-
-                all_records.append({
-                    "trade_date": trade_date,
-                    "news_timestamp": None,
-                    "headline": title[:500],
-                    "source": art.get("source", "gdelt"),
-                    "category": category,
-                    "severity": severity,
-                    "expected_impact": impact,
-                    "index_affected": "ALL",
-                    "sector_affected": "broad",
-                    "actual_value": None,
-                    "expected_value": None,
-                    "surprise": None,
-                    "surprise_direction": None,
-                })
-                raw_count += 1
+        for row in rows:
+            all_records.append({
+                "trade_date": trade_date,
+                "news_timestamp": None,
+                "headline": row["headline"],
+                "source": "gdelt",
+                "category": row["category"],
+                "entity": row.get("entity", "MACRO"),
+                "direction": row.get("direction", "NEUTRAL"),
+                "severity": row["severity"].lower()[:10],
+                "scheduled": row.get("scheduled", False),
+                "expected_impact": row.get("expected_impact", "neutral"),
+                "novelty_weight": row.get("novelty_weight", 1.0),
+                "index_affected": None,
+                "sector_affected": None,
+                "actual_value": None,
+                "expected_value": None,
+                "surprise": None,
+                "surprise_direction": None,
+            })
+            prior_categories.append(row["category"])
 
     if not all_records:
         logger.error("No news records to load!")
@@ -467,51 +340,35 @@ def load_to_db(start: date = None, end: date = None, use_llm: bool = False):
         return
 
     df = pd.DataFrame(all_records)
-
-    # Clear existing
     min_date = df["trade_date"].min()
     max_date = df["trade_date"].max()
+
     con.execute(
         "DELETE FROM daily_news_events WHERE trade_date BETWEEN ? AND ?",
         [min_date, max_date],
     )
-
-    # Reset sequence
     con.execute("INSERT INTO daily_news_events SELECT nextval('seq_news_id'), * FROM df")
 
     count = con.execute("SELECT COUNT(*) FROM daily_news_events").fetchone()[0]
     logger.info(f"Loaded {count:,} rows into daily_news_events")
 
-    # Summary
     cat_stats = con.execute("""
-        SELECT category, COUNT(*) as count,
-               ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) as pct
+        SELECT category, entity, COUNT(*) as n,
+               ROUND(AVG(novelty_weight), 3) as avg_novelty
         FROM daily_news_events
-        GROUP BY category ORDER BY count DESC
+        GROUP BY category, entity ORDER BY n DESC LIMIT 20
     """).fetchdf()
-    print("\n  News by category:")
+    print("\n  News by category + entity:")
     print(cat_stats.to_string(index=False))
 
-    sev_stats = con.execute("""
-        SELECT severity, COUNT(*) as count
-        FROM daily_news_events
-        GROUP BY severity ORDER BY count DESC
-    """).fetchdf()
-    print("\n  News by severity:")
-    print(sev_stats.to_string(index=False))
-
     day_stats = con.execute("""
-        SELECT COUNT(DISTINCT trade_date) as days_with_news,
-               MIN(trade_date) as first_date,
-               MAX(trade_date) as last_date,
-               ROUND(COUNT(*) * 1.0 / COUNT(DISTINCT trade_date), 1) as avg_per_day
+        SELECT COUNT(DISTINCT trade_date) as days,
+               COUNT(*) as total_events,
+               ROUND(COUNT(*)*1.0/COUNT(DISTINCT trade_date),1) as avg_per_day
         FROM daily_news_events
     """).fetchdf()
-    print("\n  Coverage:")
-    print(day_stats.to_string(index=False))
-
+    print("\n  Coverage:", day_stats.to_string(index=False))
     con.close()
-    print(f"\n  LLM-structured: {structured_count}, Raw keyword: {raw_count}")
 
 
 # ═══════════════════════════════════════════════════════════
