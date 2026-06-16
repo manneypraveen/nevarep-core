@@ -382,6 +382,18 @@ con.execute("""
     )
 """)
 
+# ── Daily tokens ──
+# One row per (trade_date, index_name, token); bag-of-tokens for similarity.
+# Bucket boundaries live in analysis/tokenizer.py — tune on training folds only.
+con.execute("""
+    CREATE TABLE IF NOT EXISTS daily_tokens (
+        trade_date  DATE NOT NULL,
+        index_name  VARCHAR(20) NOT NULL,
+        token       VARCHAR(60) NOT NULL,
+        PRIMARY KEY (trade_date, index_name, token)
+    )
+""")
+
 # ── Pipeline runs ──
 con.execute("""
     CREATE TABLE IF NOT EXISTS pipeline_runs (
