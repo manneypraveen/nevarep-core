@@ -193,15 +193,17 @@ def run_backtest(
             pred["predicted_range_low"] <= actual_change <= pred["predicted_range_high"]
         )
 
-        # Simulated P&L (simplified)
-        # If predicted bearish + correct → profit = |actual_change|
-        # If predicted bearish + wrong → loss = actual_change (positive = loss)
+        # Directional P&L using realized index return (symmetric, no scaling tricks).
+        # Bullish → long the index: pnl = actual_change.
+        # Bearish → short the index: pnl = -actual_change.
+        # Mixed → no position: pnl = 0.
+        # This is honest (no 2:1 win/loss asymmetry, no artificial dampening).
         if pred_direction == "bullish":
-            strategy_pnl = actual_change if direction_correct else -abs(actual_change) * 0.5
+            strategy_pnl = actual_change
         elif pred_direction == "bearish":
-            strategy_pnl = abs(actual_change) if direction_correct else -actual_change * 0.5
+            strategy_pnl = -actual_change
         else:
-            strategy_pnl = 0  # skip mixed signals
+            strategy_pnl = 0
 
         results.append({
             "prediction_date": d,
